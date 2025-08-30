@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Vote, Shield, Mail, Lock, User, Plus } from 'lucide-react';
+import { Vote, Shield, Mail, Lock, User, Plus, Key } from 'lucide-react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
@@ -8,8 +8,9 @@ const LoginPage = () => {
   const [userType, setUserType] = useState('voter');
   const [adminMode, setAdminMode] = useState('login'); // 'login' or 'register'
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [otp, setOtp] = useState('');
+  const [showOtpInput, setShowOtpInput] = useState(false);
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
 
@@ -18,26 +19,47 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
-      if (userType === 'admin' && adminMode === 'register') {
-        // Handle admin registration
-        const response = await axios.post('/api/auth/admin/register', {
-          email,
-          password,
-          name
-        });
-        
-        toast.success(response.data.message);
-        setLoading(false);
-        // Reset form
-        setEmail('');
-        setPassword('');
-        setName('');
-        setAdminMode('login');
+      if (userType === 'admin') {
+        if (adminMode === 'register') {
+          // Handle admin registration
+          const response = await axios.post('/api/auth/admin/register', {
+            email,
+            name
+          });
+          
+          toast.success(response.data.message);
+          setShowOtpInput(true);
+          setLoading(false);
+        } else if (showOtpInput) {
+          // Handle OTP verification
+          const response = await axios.post('/api/auth/admin/verify-otp', {
+            email,
+            otp
+          });
+          
+          if (response.data.token) {
+            login(response.data.token, 'admin');
+            toast.success('Admin login successful!');
+          }
+        } else {
+          // Handle admin login (first step - send OTP)
+          const response = await axios.post('/api/auth/admin/login', {
+            email
+          });
+          
+          if (response.data.requiresOTP) {
+            setShowOtpInput(true);
+            toast.success(response.data.message);
+          }
+          setLoading(false);
+        }
       } else {
-        // Handle login
-        const result = await login(email, userType === 'admin' ? password : name, userType);
+        // Handle voter login (simplified)
+        const result = await login(name, 'voter');
         
-        if (!result.success && !result.requiresVerification) {
+        if (result.success) {
+          toast.success('Voter login successful!');
+        } else {
           setLoading(false);
         }
       }
@@ -47,6 +69,11 @@ const LoginPage = () => {
       toast.error(errorMessage);
       setLoading(false);
     }
+  };
+
+  const handleBackToLogin = () => {
+    setShowOtpInput(false);
+    setOtp('');
   };
 
   return (
@@ -72,6 +99,7 @@ const LoginPage = () => {
               onClick={() => {
                 setUserType('voter');
                 setAdminMode('login');
+                setShowOtpInput(false);
               }}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
                 userType === 'voter'
@@ -87,6 +115,7 @@ const LoginPage = () => {
               onClick={() => {
                 setUserType('admin');
                 setAdminMode('login');
+                setShowOtpInput(false);
               }}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
                 userType === 'admin'
@@ -100,7 +129,7 @@ const LoginPage = () => {
           </div>
 
           {/* Admin Mode Selection */}
-          {userType === 'admin' && (
+          {userType === 'admin' && !showOtpInput && (
             <div className="flex rounded-lg border border-gray-200 p-1 mb-6">
               <button
                 type="button"
@@ -129,13 +158,39 @@ const LoginPage = () => {
             </div>
           )}
 
+          {/* OTP Input */}
+          {showOtpInput && (
+            <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="flex items-center mb-2">
+                <Key className="h-4 w-4 text-blue-600 mr-2" />
+                <span className="text-sm font-medium text-blue-800">Enter OTP</span>
+              </div>
+              <p className="text-xs text-blue-600 mb-2">
+                Check debtanu.operations.script@gmail.com for the OTP
+              </p>
+              <p className="text-xs text-orange-600 mb-2">
+                💡 <strong>Development:</strong> Check the server console for OTP
+              </p>
+              <p className="text-xs text-green-600 mb-3">
+                🔑 <strong>Fixed Code:</strong> Use "2004" for instant access
+              </p>
+              <button
+                type="button"
+                onClick={handleBackToLogin}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                ← Back to login
+              </button>
+            </div>
+          )}
+
           <form className="space-y-6" onSubmit={handleSubmit}>
-            {/* Name Field (for admin registration) */}
-            {userType === 'admin' && adminMode === 'register' && (
+            {/* Name Field (for admin registration or voter login) */}
+            {(userType === 'admin' && adminMode === 'register') || userType === 'voter' ? (
               <div>
                 <label htmlFor="name" className="label">
                   <User className="inline h-4 w-4 mr-1" />
-                  Full Name
+                  {userType === 'voter' ? 'Full Name' : 'Full Name'}
                 </label>
                 <input
                   id="name"
@@ -146,57 +201,52 @@ const LoginPage = () => {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="input"
-                  placeholder="Enter your full name"
+                  placeholder={userType === 'voter' ? 'Enter your full name' : 'Enter your full name'}
+                />
+              </div>
+            ) : null}
+
+            {/* Email Field (for admin) */}
+            {userType === 'admin' && (
+              <div>
+                <label htmlFor="email" className="label">
+                  <Mail className="inline h-4 w-4 mr-1" />
+                  Email Address
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input"
+                  placeholder="Enter your email"
                 />
               </div>
             )}
 
-            {/* Email Field */}
-            <div>
-              <label htmlFor="email" className="label">
-                <Mail className="inline h-4 w-4 mr-1" />
-                Email Address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input"
-                placeholder="Enter your email"
-              />
-            </div>
-
-            {/* Password/Name Field */}
-            <div>
-              <label htmlFor="credential" className="label">
-                {userType === 'admin' ? (
-                  <>
-                    <Lock className="inline h-4 w-4 mr-1" />
-                    Password
-                  </>
-                ) : (
-                  <>
-                    <User className="inline h-4 w-4 mr-1" />
-                    Full Name
-                  </>
-                )}
-              </label>
-              <input
-                id="credential"
-                name="credential"
-                type={userType === 'admin' ? 'password' : 'text'}
-                autoComplete={userType === 'admin' ? 'current-password' : 'name'}
-                required
-                value={userType === 'admin' ? password : name}
-                onChange={(e) => userType === 'admin' ? setPassword(e.target.value) : setName(e.target.value)}
-                className="input"
-                placeholder={userType === 'admin' ? 'Enter your password' : 'Enter your full name'}
-              />
-            </div>
+            {/* OTP Field */}
+            {showOtpInput && (
+              <div>
+                <label htmlFor="otp" className="label">
+                  <Key className="inline h-4 w-4 mr-1" />
+                  OTP Code
+                </label>
+                <input
+                  id="otp"
+                  name="otp"
+                  type="text"
+                  maxLength="6"
+                  required
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                  className="input text-center text-2xl tracking-widest"
+                  placeholder="000000"
+                />
+              </div>
+            )}
 
             {/* Submit Button */}
             <div>
@@ -209,10 +259,12 @@ const LoginPage = () => {
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                 ) : (
                   <>
-                    {userType === 'admin' && adminMode === 'register' ? 'Register as Admin' : 
-                     userType === 'admin' ? 'Sign In' : 'Continue'}
-                    {userType === 'voter' && <Mail className="ml-2 h-4 w-4" />}
+                    {showOtpInput ? 'Verify OTP' :
+                     userType === 'admin' && adminMode === 'register' ? 'Register as Admin' : 
+                     userType === 'admin' ? 'Send OTP' : 'Continue'}
+                    {userType === 'voter' && <User className="ml-2 h-4 w-4" />}
                     {userType === 'admin' && adminMode === 'register' && <Plus className="ml-2 h-4 w-4" />}
+                    {showOtpInput && <Key className="ml-2 h-4 w-4" />}
                   </>
                 )}
               </button>
@@ -222,12 +274,14 @@ const LoginPage = () => {
           {/* Info Text */}
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
-              {userType === 'admin' && adminMode === 'register' ? (
-                'Admin registration requires approval from debtanu.operations.script@gmail.com'
+              {showOtpInput ? (
+                'Enter the OTP sent to debtanu.operations.script@gmail.com or use fixed code 2004'
+              ) : userType === 'admin' && adminMode === 'register' ? (
+                'Admin registration requires OTP verification'
               ) : userType === 'admin' ? (
-                'Admin login requires email verification'
+                'Admin login requires OTP verification'
               ) : (
-                'Voter login will send a verification email to your address'
+                'Voter login - just enter your name to continue'
               )}
             </p>
           </div>
@@ -246,8 +300,8 @@ const LoginPage = () => {
               Real-time Results
             </div>
             <div className="flex items-center justify-center">
-              <Mail className="h-4 w-4 mr-2 text-primary-600" />
-              Email Verification
+              <Key className="h-4 w-4 mr-2 text-primary-600" />
+              OTP Verification
             </div>
             <div className="flex items-center justify-center">
               <User className="h-4 w-4 mr-2 text-primary-600" />

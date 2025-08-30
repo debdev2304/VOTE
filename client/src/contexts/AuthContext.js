@@ -46,36 +46,37 @@ export const AuthProvider = ({ children }) => {
     checkAuth();
   }, [token]);
 
-  const login = async (email, password, userType) => {
+  const login = async (credential, userType) => {
     try {
       let response;
       
       if (userType === 'admin') {
-        response = await axios.post('/api/auth/admin/login', {
-          email,
-          password
-        });
+        // For admin, credential should be the token from OTP verification
+        if (typeof credential === 'string' && credential.length > 50) {
+          // This is a JWT token from OTP verification
+          setToken(credential);
+          setUser(null); // Will be set by the auth check
+          setRole('admin');
+          localStorage.setItem('token', credential);
+          return { success: true };
+        } else {
+          throw new Error('Invalid admin login flow');
+        }
       } else {
+        // For voters, credential is the name
         response = await axios.post('/api/auth/voter/login', {
-          email,
-          name: password // For voters, the second field is name
+          name: credential
         });
         
-        if (response.data.message) {
-          toast.success(response.data.message);
-          return { success: true, requiresVerification: true };
-        }
+        const { token: newToken, user: userData } = response.data;
+        
+        setToken(newToken);
+        setUser(userData);
+        setRole('voter');
+        localStorage.setItem('token', newToken);
+        
+        return { success: true };
       }
-
-      const { token: newToken, user: userData } = response.data;
-      
-      setToken(newToken);
-      setUser(userData);
-      setRole(userType);
-      localStorage.setItem('token', newToken);
-      
-      toast.success(`Welcome back, ${userData.name}!`);
-      return { success: true };
       
     } catch (error) {
       const message = error.response?.data?.error || 'Login failed';

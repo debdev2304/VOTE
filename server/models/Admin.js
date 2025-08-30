@@ -25,6 +25,8 @@ const adminSchema = new mongoose.Schema({
   },
   verificationToken: String,
   verificationTokenExpires: Date,
+  otp: String,
+  otpExpires: Date,
   resetPasswordToken: String,
   resetPasswordExpires: Date,
   lastLogin: Date,
@@ -52,12 +54,25 @@ adminSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
+// Method to generate OTP
+adminSchema.methods.generateOTP = function() {
+  this.otp = Math.floor(100000 + Math.random() * 900000).toString();
+  this.otpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  return this.otp;
+};
+
+// Method to verify OTP
+adminSchema.methods.verifyOTP = function(otp) {
+  return this.otp === otp && this.otpExpires > Date.now();
+};
+
 // Method to get public profile (without password)
 adminSchema.methods.getPublicProfile = function() {
   const adminObject = this.toObject();
   delete adminObject.password;
   delete adminObject.verificationToken;
   delete adminObject.resetPasswordToken;
+  delete adminObject.otp;
   return adminObject;
 };
 

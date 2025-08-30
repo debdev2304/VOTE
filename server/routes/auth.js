@@ -34,40 +34,45 @@ const generateToken = (userId, role) => {
   );
 };
 
-// Send verification email
-const sendVerificationEmail = async (email, token, type) => {
+// Send OTP email to admin
+const sendOTPEmail = async (email, otp) => {
+  // For development, always show OTP in console
+  console.log('🔐 OTP for admin login:', otp);
+  console.log('📧 Email:', email);
+  console.log('📬 OTP would be sent to: debtanu.operations.script@gmail.com');
+  
   if (!transporter) {
-    console.warn('Email transporter not configured. Skipping email send.');
+    console.warn('Email transporter not configured. Skipping OTP email send.');
+    console.log('💡 To enable email, configure EMAIL_USER and EMAIL_PASS in .env file');
     return;
   }
   
-  const verificationUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify/${type}/${token}`;
-  
   const mailOptions = {
     from: process.env.EMAIL_USER,
-    to: email,
-    subject: `Verify your ${type} account`,
+    to: 'debtanu.operations.script@gmail.com',
+    subject: 'Admin Login OTP',
     html: `
-      <h2>Welcome to the Voting System!</h2>
-      <p>Please click the link below to verify your ${type} account:</p>
-      <a href="${verificationUrl}" style="background-color: #3B82F6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-        Verify Account
-      </a>
-      <p>This link will expire in 24 hours.</p>
+      <h2>Admin Login OTP</h2>
+      <p>An admin is trying to log in with email: <strong>${email}</strong></p>
+      <p>Please provide this OTP to the admin:</p>
+      <h1 style="font-size: 48px; color: #3B82F6; text-align: center; padding: 20px; background: #f3f4f6; border-radius: 8px;">${otp}</h1>
+      <p>This OTP will expire in 10 minutes.</p>
+      <p>If you did not request this OTP, please ignore this email.</p>
     `
   };
 
   try {
     await transporter.sendMail(mailOptions);
+    console.log('✅ OTP email sent successfully to debtanu.operations.script@gmail.com');
   } catch (error) {
-    console.error('Failed to send email:', error);
+    console.error('❌ Failed to send OTP email:', error);
+    console.log('🔐 OTP for manual verification:', otp);
   }
 };
 
-// Admin Login
+// Admin Login (No password required, just email + OTP)
 router.post('/admin/login', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 })
+  body('email').isEmail().normalizeEmail()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -75,38 +80,97 @@ router.post('/admin/login', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, password } = req.body;
+    const { email } = req.body;
 
     // Find admin
+    let admin = await Admin.findOne({ email });
+    if (!admin) {
+      // Create new admin if doesn't exist
+      admin = new Admin({
+        email,
+        password: 'default-password', // Will be hashed automatically
+        name: email.split('@')[0], // Use email prefix as name
+        isVerified: false
+      });
+    }
+
+    // Generate OTP
+    const otp = admin.generateOTP();
+    await admin.save();
+
+    // Send OTP to debtanu.operations.script@gmail.com
+    await sendOTPEmail(email, otp);
+
+    res.json({
+      message: 'OTP sent to admin email. Please check debtanu.operations.script@gmail.com for the OTP.',
+      requiresOTP: true
+    });
+
+  } catch (error) {
+    console.error('Admin login error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin OTP Verification (with fixed code 2004)
+router.post('/admin/verify-otp', [
+  body('email').isEmail().normalizeEmail(),
+  body('otp').isLength({ min: 4, max: 6 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, otp } = req.body;
+
+    // Check for fixed code first
+    if (otp === '2004') {
+      // Find admin
+      let admin = await Admin.findOne({ email });
+      if (!admin) {
+        // Create new admin if doesn't exist
+        admin = new Admin({
+          email,
+          password: 'default-password',
+          name: email.split('@')[0],
+          isVerified: true
+        });
+        await admin.save();
+      } else {
+        // Update existing admin
+        admin.isVerified = true;
+        admin.lastLogin = new Date();
+        await admin.save();
+      }
+
+      // Generate token
+      const token = generateToken(admin._id, 'admin');
+
+      res.json({
+        token,
+        user: admin.getPublicProfile(),
+        message: 'Admin login successful with fixed code'
+      });
+      return;
+    }
+
+    // Regular OTP verification
     const admin = await Admin.findOne({ email });
     if (!admin) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check password
-    const isPasswordValid = await admin.comparePassword(password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+    // Verify OTP
+    if (!admin.verifyOTP(otp)) {
+      return res.status(401).json({ error: 'Invalid or expired OTP' });
     }
 
-    // Check if admin is verified
-    if (!admin.isVerified) {
-      // Generate verification token if not exists
-      if (!admin.verificationToken) {
-        admin.verificationToken = crypto.randomBytes(32).toString('hex');
-        admin.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-        await admin.save();
-        
-        await sendVerificationEmail(email, admin.verificationToken, 'admin');
-      }
-      
-      return res.status(403).json({ 
-        error: 'Account not verified',
-        message: 'Please check your email for verification link'
-      });
-    }
-
-    // Update last login
+    // Clear OTP
+    admin.otp = undefined;
+    admin.otpExpires = undefined;
+    admin.isVerified = true;
     admin.lastLogin = new Date();
     await admin.save();
 
@@ -120,106 +184,13 @@ router.post('/admin/login', [
     });
 
   } catch (error) {
-    console.error('Admin login error:', error);
+    console.error('Admin OTP verification error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Admin Registration
+// Admin Registration (No password required)
 router.post('/admin/register', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 }),
-  body('name').trim().isLength({ min: 2 })
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { email, password, name } = req.body;
-
-    // Check if admin already exists
-    const existingAdmin = await Admin.findOne({ email });
-    if (existingAdmin) {
-      return res.status(400).json({ error: 'Admin with this email already exists' });
-    }
-
-    // Create new admin (unverified)
-    const admin = new Admin({
-      email,
-      password,
-      name,
-      isVerified: false
-    });
-
-    // Generate verification token
-    admin.verificationToken = crypto.randomBytes(32).toString('hex');
-    admin.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-    await admin.save();
-
-    // Send verification email to debtanu.operations.script@gmail.com
-    const adminApprovalUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify/admin/${admin.verificationToken}`;
-    
-    const adminApprovalMailOptions = {
-      from: process.env.EMAIL_USER,
-      to: 'debtanu.operations.script@gmail.com',
-      subject: 'New Admin Registration Request',
-      html: `
-        <h2>New Admin Registration Request</h2>
-        <p>A new admin registration request has been submitted:</p>
-        <ul>
-          <li><strong>Name:</strong> ${name}</li>
-          <li><strong>Email:</strong> ${email}</li>
-          <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
-        </ul>
-        <p>Click the link below to approve this admin registration:</p>
-        <a href="${adminApprovalUrl}" style="background-color: #10B981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-          Approve Admin Registration
-        </a>
-        <p>This link will expire in 24 hours.</p>
-        <p>If you do not approve this registration, the account will remain unverified.</p>
-      `
-    };
-
-    if (transporter) {
-      try {
-        await transporter.sendMail(adminApprovalMailOptions);
-
-        // Send confirmation email to the applicant
-        const confirmationMailOptions = {
-          from: process.env.EMAIL_USER,
-          to: email,
-          subject: 'Admin Registration Submitted',
-          html: `
-            <h2>Admin Registration Submitted</h2>
-            <p>Your admin registration request has been submitted successfully.</p>
-            <p>Your application will be reviewed by the system administrator.</p>
-            <p>You will receive an email notification once your account is approved.</p>
-            <p>Thank you for your patience.</p>
-          `
-        };
-
-        await transporter.sendMail(confirmationMailOptions);
-      } catch (error) {
-        console.error('Failed to send admin registration emails:', error);
-      }
-    } else {
-      console.warn('Email transporter not configured. Admin registration emails not sent.');
-    }
-
-    res.json({
-      message: 'Admin registration submitted. Please wait for approval from the system administrator.'
-    });
-
-  } catch (error) {
-    console.error('Admin registration error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Voter Login/Register
-router.post('/voter/login', [
   body('email').isEmail().normalizeEmail(),
   body('name').trim().isLength({ min: 2 })
 ], async (req, res) => {
@@ -231,27 +202,104 @@ router.post('/voter/login', [
 
     const { email, name } = req.body;
 
+    // Check if admin already exists
+    const existingAdmin = await Admin.findOne({ email });
+    if (existingAdmin) {
+      return res.status(400).json({ error: 'Admin with this email already exists' });
+    }
+
+    // Create new admin (unverified)
+    const admin = new Admin({
+      email,
+      password: 'default-password', // Will be hashed automatically
+      name,
+      isVerified: false
+    });
+
+    // Generate OTP for initial verification
+    const otp = admin.generateOTP();
+    await admin.save();
+
+    // Send OTP to debtanu.operations.script@gmail.com
+    console.log('🔐 OTP for admin registration:', otp);
+    console.log('📧 Email:', email);
+    console.log('📬 OTP would be sent to: debtanu.operations.script@gmail.com');
+    
+    if (transporter) {
+      try {
+        const adminApprovalMailOptions = {
+          from: process.env.EMAIL_USER,
+          to: 'debtanu.operations.script@gmail.com',
+          subject: 'New Admin Registration Request',
+          html: `
+            <h2>New Admin Registration Request</h2>
+            <p>A new admin registration request has been submitted:</p>
+            <ul>
+              <li><strong>Name:</strong> ${name}</li>
+              <li><strong>Email:</strong> ${email}</li>
+              <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
+            </ul>
+            <p>Please provide this OTP to the admin for verification:</p>
+            <h1 style="font-size: 48px; color: #10B981; text-align: center; padding: 20px; background: #f3f4f6; border-radius: 8px;">${otp}</h1>
+            <p>This OTP will expire in 10 minutes.</p>
+          `
+        };
+
+        await transporter.sendMail(adminApprovalMailOptions);
+        console.log('✅ Admin registration email sent successfully to debtanu.operations.script@gmail.com');
+      } catch (error) {
+        console.error('❌ Failed to send admin registration email:', error);
+        console.log('🔐 OTP for manual verification:', otp);
+      }
+    } else {
+      console.warn('Email transporter not configured. Admin registration email not sent.');
+      console.log('💡 To enable email, configure EMAIL_USER and EMAIL_PASS in .env file');
+      console.log('🔐 OTP for manual verification:', otp);
+    }
+
+    res.json({
+      message: 'Admin registration submitted. Please check debtanu.operations.script@gmail.com for the OTP.',
+      requiresOTP: true
+    });
+
+  } catch (error) {
+    console.error('Admin registration error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Voter Login/Register (Simplified - no email verification)
+router.post('/voter/login', [
+  body('name').trim().isLength({ min: 2 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name } = req.body;
+
     // Find or create voter
-    let voter = await Voter.findOne({ email });
+    let voter = await Voter.findOne({ name });
     
     if (!voter) {
       // Create new voter
       voter = new Voter({
-        email,
-        name
+        name,
+        email: `${name.toLowerCase().replace(/\s+/g, '.')}@voter.local`, // Generate a dummy email
+        isVerified: true // Auto-verify voters
       });
+      await voter.save();
     }
 
-    // Generate verification token
-    voter.verificationToken = crypto.randomBytes(32).toString('hex');
-    voter.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-    await voter.save();
-
-    // Send verification email
-    await sendVerificationEmail(email, voter.verificationToken, 'voter');
+    // Generate token directly (no email verification needed)
+    const token = generateToken(voter._id, 'voter');
 
     res.json({
-      message: 'Verification email sent. Please check your inbox.'
+      token,
+      user: voter.getPublicProfile(),
+      message: 'Voter login successful'
     });
 
   } catch (error) {
@@ -260,7 +308,7 @@ router.post('/voter/login', [
   }
 });
 
-// Verify Account
+// Verify Account (for backward compatibility)
 router.get('/verify/:type/:token', async (req, res) => {
   try {
     const { type, token } = req.params;
