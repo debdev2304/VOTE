@@ -49,7 +49,7 @@ const sendOTPEmail = async (email, otp) => {
   
   const mailOptions = {
     from: process.env.EMAIL_USER,
-    to: 'debtanu.operations.script@gmail.com',
+    to: 'dasguptasoumasish@gmail.com',
     subject: 'Admin Login OTP',
     html: `
       <h2>Admin Login OTP</h2>
