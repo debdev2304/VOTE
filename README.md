@@ -185,6 +185,13 @@ voting-system/
 5. Build the frontend: `npm run build`
 6. Start the production server: `npm start`
 
+### Deployed links
+
+```
+   https://vote-bg3z.onrender.com/ -- frontend url
+   https://vote-api-w1t0.onrender.com/api -- backend api utl
+```
+
 ### Environment Variables for Production
 ```env
 NODE_ENV=production
