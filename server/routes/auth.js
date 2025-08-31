@@ -13,7 +13,7 @@ const router = express.Router();
 // Email transporter setup
 let transporter;
 try {
-  transporter = nodemailer.createTransporter({
+  transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
       user: process.env.EMAIL_USER,
